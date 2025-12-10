@@ -34,3 +34,21 @@ async def webhook(alert: Alert):
         "lod": alert.lod,
         "1R": round(alert.orh + alert.ticks_above * 0.01 - alert.lod, 2)
     }
+
+last_alert = None
+last_id = 0
+
+@app.post("/webhook/orb")
+async def webhook(alert: Alert):
+    global last_alert, last_id
+    if alert.key != SECRET_KEY:
+        raise HTTPException(401, "Bad key")
+    last_id += 1
+    last_alert = alert.dict()
+    last_alert["id"] = last_id
+    logging.info(f"ALERT RECEIVED → {alert.ticker}")
+    return {"status": "stored", "id": last_id}
+
+@app.get("/last-alert")
+async def get_last():
+    return {"id": last_id, "alert": last_alert} if last_alert else {"id": 0}
