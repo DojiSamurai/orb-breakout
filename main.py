@@ -3,11 +3,11 @@ from pydantic import BaseModel
 from ib_insync import IB, Stock, StopOrder
 import logging
 
-# ================== CONFIG (CHANGE ONLY THESE 4 LINES) ==================
-SECRET_KEY = "dojisamurai-secret-key-2025f9e8d"   # keep this secret
-IB_HOST = "127.0.0.1"
-IB_PORT = 7497          # 7497 = live, 7496 = paper
-CLIENT_ID = 1
+# ================== CONFIG (CLOUD MODE – NO LOCAL TWS NEEDED) ==================
+SECRET_KEY = "dojisamurai-secret-key-2025f9e8d"
+IB_HOST = None          # ← we will connect from YOUR computer later
+IB_PORT = None
+CLIENT_ID = None
 # =======================================================================
 
 app = FastAPI()
