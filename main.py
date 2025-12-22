@@ -1,26 +1,45 @@
 from fastapi import FastAPI, HTTPException, Request
-import logging, json, re
+import logging, json, re, os
 from typing import Any, Dict, Optional
+from pathlib import Path
 
 app = FastAPI()
 logging.basicConfig(level=logging.INFO)
 
 SECRET_KEY = "dojisamurai-secret-key-2025f9e8d"
 
-last_alert: Optional[Dict[str, Any]] = None
-last_id: int = 0
+# Persist state to disk.
+# NOTE: /tmp persists for the life of the instance, but can reset on redeploy.
+# If you add a Render Disk, set STATE_DIR to the disk mount path in Render env vars.
+STATE_DIR = Path(os.getenv("STATE_DIR", "/tmp"))
+STATE_DIR.mkdir(parents=True, exist_ok=True)
+STATE_FILE = STATE_DIR / "last_alert.json"
+
+
+def _read_state() -> Dict[str, Any]:
+    if not STATE_FILE.exists():
+        return {"id": 0, "alert": None}
+    try:
+        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {"id": 0, "alert": None}
+
+
+def _write_state(state: Dict[str, Any]) -> None:
+    tmp = STATE_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state), encoding="utf-8")
+    tmp.replace(STATE_FILE)
 
 
 def _parse_tv_body(raw: bytes) -> Dict[str, Any]:
     s = raw.decode("utf-8", errors="replace").strip()
 
-    # If TradingView ever sends invalid JSON with bare na (unquoted), fix it:
-    # {"x": na} -> {"x": null}
+    # If TradingView sends invalid JSON with bare na: {"x": na}
     s = re.sub(r'(:\s*)na(\s*[,\}])', r'\1null\2', s)
 
     obj = json.loads(s)
 
-    # Handle rare case of double-encoded JSON string
+    # Handle double-encoded JSON string
     if isinstance(obj, str):
         obj = json.loads(obj)
 
@@ -64,36 +83,34 @@ async def root():
 
 @app.post("/webhook/orb")
 async def webhook(request: Request):
-    global last_alert, last_id
-
     raw = await request.body()
     try:
         data = _parse_tv_body(raw)
     except Exception as e:
-        logging.error(f"422 parse fail. raw={raw[:800]!r}")
+        logging.error(f"422 parse fail raw={raw[:800]!r}")
         raise HTTPException(status_code=422, detail=f"Invalid JSON: {e}")
 
     if data.get("key") != SECRET_KEY:
         raise HTTPException(status_code=401, detail="Invalid key")
 
-    # Prefer 'lod' if present, otherwise accept legacy 'running_lod'
+    # Accept lod OR running_lod (backward compatible)
     lod_val = data.get("lod")
     if lod_val is None and "running_lod" in data:
         lod_val = data.get("running_lod")
 
-    # Normalize to what the bot expects
     normalized = {
+        # what the bot needs
         "ticker": data.get("ticker"),
         "orh": _to_float(data.get("orh")),
         "lod": _to_float(lod_val),
         "atr14": _to_float(data.get("atr14")),
         "ticks_above": _to_int(data.get("ticks_above")),
         "key": data.get("key"),
-        # keep extras if you want (harmless)
+        # optional extras for debug
         "tf": data.get("tf"),
     }
 
-    # Only store if it won't break the bot
+    # IMPORTANT: Only store alerts that won't break the bot
     required_ok = (
         isinstance(normalized["ticker"], str) and normalized["ticker"].strip() and
         normalized["orh"] is not None and
@@ -106,14 +123,19 @@ async def webhook(request: Request):
         logging.warning(f"IGNORED alert (missing/na fields): {normalized}")
         return {"status": "ignored", "reason": "missing_or_na_fields"}
 
-    last_id += 1
-    normalized["id"] = last_id
-    last_alert = normalized
+    state = _read_state()
+    new_id = int(state.get("id", 0)) + 1
 
-    logging.info(f"ALERT STORED → {normalized['ticker']} id={last_id}")
-    return {"status": "stored", "id": last_id, "ticker": normalized["ticker"]}
+    state = {
+        "id": new_id,
+        "alert": {**normalized, "id": new_id}
+    }
+    _write_state(state)
+
+    logging.info(f"ALERT STORED → {normalized['ticker']} id={new_id}")
+    return {"status": "stored", "id": new_id, "ticker": normalized["ticker"]}
 
 
 @app.get("/last-alert")
 async def get_last():
-    return {"id": last_id, "alert": last_alert}
+    return _read_state()
