@@ -15,6 +15,7 @@ def _parse_tv_body(raw: bytes) -> Dict[str, Any]:
     s = raw.decode("utf-8", errors="replace").strip()
 
     # If TradingView ever sends invalid JSON with bare na (unquoted), fix it:
+    # {"x": na} -> {"x": null}
     s = re.sub(r'(:\s*)na(\s*[,\}])', r'\1null\2', s)
 
     obj = json.loads(s)
@@ -69,33 +70,41 @@ async def webhook(request: Request):
     try:
         data = _parse_tv_body(raw)
     except Exception as e:
-        logging.error(f"422 parse fail. raw={raw[:500]!r}")
+        logging.error(f"422 parse fail. raw={raw[:800]!r}")
         raise HTTPException(status_code=422, detail=f"Invalid JSON: {e}")
 
     if data.get("key") != SECRET_KEY:
         raise HTTPException(status_code=401, detail="Invalid key")
 
-    # Normalize fields
+    # Prefer 'lod' if present, otherwise accept legacy 'running_lod'
+    lod_val = data.get("lod")
+    if lod_val is None and "running_lod" in data:
+        lod_val = data.get("running_lod")
+
+    # Normalize to what the bot expects
     normalized = {
         "ticker": data.get("ticker"),
-        "tf": data.get("tf"),
         "orh": _to_float(data.get("orh")),
-        "trigger": _to_float(data.get("trigger")),
-        "lod": _to_float(data.get("running_lod")),          # <- map to lod
-        "running_lod": _to_float(data.get("running_lod")),
+        "lod": _to_float(lod_val),
         "atr14": _to_float(data.get("atr14")),
-        "lodPct_orh": _to_float(data.get("lodPct_orh")),
-        "rvol_orh": _to_float(data.get("rvol_orh")),
         "ticks_above": _to_int(data.get("ticks_above")),
         "key": data.get("key"),
+        # keep extras if you want (harmless)
+        "tf": data.get("tf"),
     }
 
-    # Minimum required sanity checks
-    if not normalized["ticker"]:
-        raise HTTPException(status_code=422, detail="Missing ticker")
-    if normalized["orh"] is None or normalized["lod"] is None:
-        # You can choose to store anyway, but don't trade on it
-        logging.warning(f"Alert missing numeric fields: {normalized}")
+    # Only store if it won't break the bot
+    required_ok = (
+        isinstance(normalized["ticker"], str) and normalized["ticker"].strip() and
+        normalized["orh"] is not None and
+        normalized["lod"] is not None and
+        normalized["atr14"] is not None and normalized["atr14"] > 0 and
+        normalized["ticks_above"] is not None
+    )
+
+    if not required_ok:
+        logging.warning(f"IGNORED alert (missing/na fields): {normalized}")
+        return {"status": "ignored", "reason": "missing_or_na_fields"}
 
     last_id += 1
     normalized["id"] = last_id
