@@ -9,8 +9,6 @@ logging.basicConfig(level=logging.INFO)
 SECRET_KEY = "dojisamurai-secret-key-2025f9e8d"
 
 # Persist state to disk.
-# NOTE: /tmp persists for the life of the instance, but can reset on redeploy.
-# If you add a Render Disk, set STATE_DIR to the disk mount path in Render env vars.
 STATE_DIR = Path(os.getenv("STATE_DIR", "/tmp"))
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 STATE_FILE = STATE_DIR / "last_alert.json"
@@ -93,49 +91,58 @@ async def webhook(request: Request):
     if data.get("key") != SECRET_KEY:
         raise HTTPException(status_code=401, detail="Invalid key")
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # v7.2 UPDATE: Pass through ENTIRE payload, just validate required fields
+    # ═══════════════════════════════════════════════════════════════════════
+    
     # Accept lod OR running_lod (backward compatible)
-    lod_val = data.get("lod")
-    if lod_val is None and "running_lod" in data:
-        lod_val = data.get("running_lod")
-
-    normalized = {
-        # what the bot needs
-        "ticker": data.get("ticker"),
-        "orh": _to_float(data.get("orh")),
-        "lod": _to_float(lod_val),
-        "atr14": _to_float(data.get("atr14")),
-        "ticks_above": _to_int(data.get("ticks_above")),
-        "key": data.get("key"),
-        # optional extras for debug
-        "tf": data.get("tf"),
-    }
-
-    # IMPORTANT: Only store alerts that won't break the bot
+    if data.get("lod") is None and "running_lod" in data:
+        data["lod"] = data.get("running_lod")
+    
+    # Validate minimum required fields exist
+    ticker = data.get("ticker")
+    orh = _to_float(data.get("orh"))
+    lod = _to_float(data.get("lod"))
+    
+    # For v7.2: prefer adr/adr_pct, fall back to atr14
+    adr = _to_float(data.get("adr"))
+    adr_pct = _to_float(data.get("adr_pct"))
+    atr14 = _to_float(data.get("atr14"))
+    has_adr = (adr is not None and adr > 0) or (adr_pct is not None and adr_pct > 0) or (atr14 is not None and atr14 > 0)
+    
     required_ok = (
-        isinstance(normalized["ticker"], str) and normalized["ticker"].strip() and
-        normalized["orh"] is not None and
-        normalized["lod"] is not None and
-        normalized["atr14"] is not None and normalized["atr14"] > 0 and
-        normalized["ticks_above"] is not None
+        isinstance(ticker, str) and ticker.strip() and
+        orh is not None and
+        lod is not None and
+        has_adr
     )
 
     if not required_ok:
-        logging.warning(f"IGNORED alert (missing/na fields): {normalized}")
+        logging.warning(f"IGNORED alert (missing/na fields): ticker={ticker} orh={orh} lod={lod} adr={adr} atr14={atr14}")
         return {"status": "ignored", "reason": "missing_or_na_fields"}
 
     state = _read_state()
     new_id = int(state.get("id", 0)) + 1
 
+    # Pass through the ENTIRE payload, just add the id
+    alert_data = {**data, "id": new_id}
+    
     state = {
         "id": new_id,
-        "alert": {**normalized, "id": new_id}
+        "alert": alert_data
     }
     _write_state(state)
 
-    logging.info(f"ALERT STORED → {normalized['ticker']} id={new_id}")
-    return {"status": "stored", "id": new_id, "ticker": normalized["ticker"]}
+    logging.info(f"ALERT STORED → {ticker} id={new_id} keys={list(data.keys())}")
+    return {"status": "stored", "id": new_id, "ticker": ticker}
 
 
 @app.get("/last-alert")
 async def get_last():
     return _read_state()
+
+
+@app.get("/health")
+async def health():
+    """Health check endpoint"""
+    return {"status": "ok", "version": "v7.2"}
