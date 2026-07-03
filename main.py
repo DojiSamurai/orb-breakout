@@ -1,4 +1,3 @@
-"""
 DojiSamurai ORB Webhook Server v2.0 — Alert Queue (FastAPI)
 ===========================================================
 
@@ -93,9 +92,9 @@ async def receive_regime(request: Request):
     logger.info(f"REGIME ALERT → {ticker} regime={regime}")
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=False) as client:
             await client.post(
-                f"http://{VPS_IP}:8089/webhook/regime",
+                f"https://{VPS_IP}/webhook/regime",
                 json=data,
                 timeout=5.0
             )
