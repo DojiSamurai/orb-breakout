@@ -1,40 +1,35 @@
-DojiSamurai ORB Webhook Server v2.0 — Alert Queue (FastAPI)
-===========================================================
+DojiSamurai ORB Webhook Server v2.0 - Alert Queue (FastAPI)
 
 FIXED: Now stores ALL alerts in a queue instead of just the last one.
 Bot can fetch all alerts since a given ID to ensure none are missed.
 
 Endpoints:
-  POST /webhook/orb          — Receive alert from TradingView
-  POST /webhook/regime       — Receive regime alert from TradingView, forward to bot
-  GET  /last-alert           — Get most recent alert (backwards compatible)
-  GET  /alerts-since/{id}    — Get ALL alerts since given ID (new)
-  GET  /alerts-all           — Get all stored alerts (debug)
-  DELETE /alerts-clear       — Clear all alerts (admin)
-  GET  /health               — Health check
+  POST /webhook/orb          - Receive alert from TradingView
+  POST /webhook/regime       - Receive regime alert from TradingView, forward to bot
+  GET  /last-alert           - Get most recent alert (backwards compatible)
+  GET  /alerts-since/{id}    - Get ALL alerts since given ID (new)
+  GET  /alerts-all           - Get all stored alerts (debug)
+  DELETE /alerts-clear       - Clear all alerts (admin)
+  GET  /health               - Health check
 
 Deploy to Render as a Python web service.
 Start command: uvicorn main:app --host 0.0.0.0 --port $PORT
 """
 
 from fastapi import FastAPI, Request
-from pydantic import BaseModel
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 import threading
 import time
 import logging
 import httpx
 
-# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="DojiSamurai ORB Webhook v2.0")
 
-# VPS bot address
 VPS_IP = "5.161.96.166"
 
-# Thread-safe alert storage
 alerts_lock = threading.Lock()
 alerts_queue: List[Dict[str, Any]] = []
 next_alert_id = 1
@@ -52,7 +47,6 @@ def get_next_id() -> int:
 async def receive_alert(request: Request):
     """Receive alert from TradingView and add to queue."""
     global alerts_queue
-
     try:
         data = await request.json()
     except Exception as e:
@@ -69,11 +63,9 @@ async def receive_alert(request: Request):
             "timestamp": time.time()
         }
         alerts_queue.append(alert_entry)
-
         if len(alerts_queue) > MAX_ALERTS:
             alerts_queue = alerts_queue[-MAX_ALERTS:]
-
-        logger.info(f"ALERT STORED → {ticker} id={alert_id} keys={list(data.keys())}")
+        logger.info(f"ALERT STORED -> {ticker} id={alert_id} keys={list(data.keys())}")
 
     return {"status": "ok", "id": alert_id, "ticker": ticker}
 
@@ -89,7 +81,7 @@ async def receive_regime(request: Request):
 
     ticker = data.get("symbol", data.get("ticker", "SPY"))
     regime = data.get("regime", "UNKNOWN")
-    logger.info(f"REGIME ALERT → {ticker} regime={regime}")
+    logger.info(f"REGIME ALERT -> {ticker} regime={regime}")
 
     try:
         async with httpx.AsyncClient(verify=False) as client:
@@ -98,7 +90,7 @@ async def receive_regime(request: Request):
                 json=data,
                 timeout=5.0
             )
-        logger.info(f"REGIME forwarded to bot OK")
+        logger.info("REGIME forwarded to bot OK")
     except Exception as e:
         logger.warning(f"Failed to forward regime to bot: {e}")
 
@@ -111,17 +103,13 @@ async def last_alert():
     with alerts_lock:
         if not alerts_queue:
             return {"id": None, "alert": None}
-
         latest = alerts_queue[-1]
         return {"id": latest["id"], "alert": latest["alert"]}
 
 
 @app.get("/alerts-since/{since_id}")
 async def alerts_since(since_id: int):
-    """
-    Get ALL alerts with ID > since_id.
-    Returns: {"alerts": [{id, alert}, ...], "count": N}
-    """
+    """Get ALL alerts with ID > since_id."""
     with alerts_lock:
         newer = [{"id": a["id"], "alert": a["alert"]}
                  for a in alerts_queue if a["id"] > since_id]
