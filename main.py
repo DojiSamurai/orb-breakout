@@ -1,3 +1,4 @@
+"""
 DojiSamurai ORB Webhook Server v2.0 - Alert Queue (FastAPI)
 
 FIXED: Now stores ALL alerts in a queue instead of just the last one.
@@ -164,3 +165,4 @@ async def root():
             "GET /health"
         ]
     }
+```
