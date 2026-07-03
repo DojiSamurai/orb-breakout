@@ -46,61 +46,43 @@ def get_next_id() -> int:
 
 @app.post("/webhook/orb")
 async def receive_alert(request: Request):
-    """Receive alert from TradingView and add to queue."""
     global alerts_queue
     try:
         data = await request.json()
     except Exception as e:
         logger.error(f"JSON parse error: {e}")
         return {"error": "Invalid JSON"}
-
     ticker = data.get("ticker", "UNKNOWN")
-
     with alerts_lock:
         alert_id = get_next_id()
-        alert_entry = {
-            "id": alert_id,
-            "alert": data,
-            "timestamp": time.time()
-        }
-        alerts_queue.append(alert_entry)
+        alerts_queue.append({"id": alert_id, "alert": data, "timestamp": time.time()})
         if len(alerts_queue) > MAX_ALERTS:
             alerts_queue = alerts_queue[-MAX_ALERTS:]
-        logger.info(f"ALERT STORED -> {ticker} id={alert_id} keys={list(data.keys())}")
-
+        logger.info(f"ALERT STORED -> {ticker} id={alert_id}")
     return {"status": "ok", "id": alert_id, "ticker": ticker}
 
 
 @app.post("/webhook/regime")
 async def receive_regime(request: Request):
-    """Receive regime alert from TradingView Pine and forward to bot."""
     try:
         data = await request.json()
     except Exception as e:
         logger.error(f"Regime JSON parse error: {e}")
         return {"error": "Invalid JSON"}
-
     ticker = data.get("symbol", data.get("ticker", "SPY"))
     regime = data.get("regime", "UNKNOWN")
     logger.info(f"REGIME ALERT -> {ticker} regime={regime}")
-
     try:
         async with httpx.AsyncClient(verify=False) as client:
-            await client.post(
-                f"https://{VPS_IP}/webhook/regime",
-                json=data,
-                timeout=5.0
-            )
+            await client.post(f"https://{VPS_IP}/webhook/regime", json=data, timeout=5.0)
         logger.info("REGIME forwarded to bot OK")
     except Exception as e:
         logger.warning(f"Failed to forward regime to bot: {e}")
-
     return {"status": "ok", "ticker": ticker, "regime": regime}
 
 
 @app.get("/last-alert")
 async def last_alert():
-    """Get most recent alert (backwards compatible with existing bot)."""
     with alerts_lock:
         if not alerts_queue:
             return {"id": None, "alert": None}
@@ -110,20 +92,16 @@ async def last_alert():
 
 @app.get("/alerts-since/{since_id}")
 async def alerts_since(since_id: int):
-    """Get ALL alerts with ID > since_id."""
     with alerts_lock:
-        newer = [{"id": a["id"], "alert": a["alert"]}
-                 for a in alerts_queue if a["id"] > since_id]
+        newer = [{"id": a["id"], "alert": a["alert"]} for a in alerts_queue if a["id"] > since_id]
         return {"alerts": newer, "count": len(newer)}
 
 
 @app.get("/alerts-all")
 async def alerts_all():
-    """Debug endpoint to see all stored alerts."""
     with alerts_lock:
         return {
-            "alerts": [{"id": a["id"], "ticker": a["alert"].get("ticker", "?")}
-                       for a in alerts_queue],
+            "alerts": [{"id": a["id"], "ticker": a["alert"].get("ticker", "?")} for a in alerts_queue],
             "count": len(alerts_queue),
             "next_id": next_alert_id
         }
@@ -131,7 +109,6 @@ async def alerts_all():
 
 @app.delete("/alerts-clear")
 async def alerts_clear():
-    """Admin endpoint to clear all alerts."""
     global alerts_queue
     with alerts_lock:
         count = len(alerts_queue)
@@ -141,28 +118,14 @@ async def alerts_clear():
 
 @app.get("/health")
 async def health():
-    """Health check endpoint."""
     with alerts_lock:
-        return {
-            "status": "ok",
-            "alerts_queued": len(alerts_queue),
-            "next_id": next_alert_id
-        }
+        return {"status": "ok", "alerts_queued": len(alerts_queue), "next_id": next_alert_id}
 
 
 @app.get("/")
 async def root():
-    """Root endpoint."""
     return {
         "service": "DojiSamurai ORB Webhook v2.0",
-        "endpoints": [
-            "POST /webhook/orb",
-            "POST /webhook/regime",
-            "GET /last-alert",
-            "GET /alerts-since/{id}",
-            "GET /alerts-all",
-            "DELETE /alerts-clear",
-            "GET /health"
-        ]
+        "endpoints": ["POST /webhook/orb", "POST /webhook/regime", "GET /last-alert",
+                      "GET /alerts-since/{id}", "GET /alerts-all", "DELETE /alerts-clear", "GET /health"]
     }
-```
